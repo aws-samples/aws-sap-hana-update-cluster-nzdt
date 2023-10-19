@@ -1,0 +1,7 @@
+---
+# Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+
+# Task to start ASCS and Sap Application Server
+- name: Task to Start SAP HANA Patching for  {{ SID }}
+  include_tasks: patch_sap_hana_db.yml
+

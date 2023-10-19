@@ -1,0 +1,29 @@
+---
+   # creating directories for HANA media download
+ # Set source if it was file system
+   - name: Set media source facts
+     set_fact:
+       hana_media_compressed_path: "{{ MEDIALOC }}"
+   
+   # deleting previous HANA extract directory if any
+   - name: cleaning up previous HANA extract directory if any
+     file:
+       path: "{{ hana_media_extracted_path }}"
+       state: absent
+   
+   # re-creating temp directory for HANA media extract
+   - name: re-creating temp directory for HANA media extract
+     file: 
+       path: "{{ hana_media_extracted_path }}"
+       state: directory
+       owner: "{{ internal_sid_user }}"
+       group: sapsys
+       mode: '0777'
+
+   # extract HANA  SAR Runtime media
+   - name: extract HANA SAR media to {{ hana_media_extracted_path }} from {{ hana_media_compressed_path }}
+    #  environment:
+    #   TERM: vt100
+    #  command: sudo -u {{ internal_sid_user }} -i find {{ hana_media_compressed_path }} -name '*.SAR' -type f -print0 -exec SAPCAR -R {{ hana_media_extracted_path }} -xvf '{}' -manifest SIGNATURE.SMF \;
+     shell: sudo -u {{ internal_sid_user }} -i find {{ hana_media_compressed_path }} -name '*.SAR' -type f -print0 -exec SAPCAR -R {{ hana_media_extracted_path }} -xvf '{}' -manifest SIGNATURE.SMF \;
+     register: hanaextract

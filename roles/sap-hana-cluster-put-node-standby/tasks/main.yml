@@ -1,0 +1,18 @@
+---
+  # Put node of the cluster in standby mode
+  - name: Put node to standby in cluster
+    become: yes
+    become_method: sudo
+    shell:
+      pcs node standby 
+
+  # Wait for complete standby status
+  - name: Check if node is in standby
+    become: yes
+    become_method: sudo
+    shell: |
+      pcs status | grep "Node {{ hname.stdout }}: standby"
+    register: standbycheck
+    until: "'with active resources' not in standbycheck.stdout and standbycheck.rc == 0"
+    retries: 10
+    delay: 30

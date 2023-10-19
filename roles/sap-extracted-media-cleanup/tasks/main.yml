@@ -1,0 +1,8 @@
+---
+
+   # deleting previous HANA extract directory if any
+   - name: cleaning up previous HANA extract directory if any
+     file:
+       path: "{{ hana_media_extracted_path }}"
+       state: absent
+   

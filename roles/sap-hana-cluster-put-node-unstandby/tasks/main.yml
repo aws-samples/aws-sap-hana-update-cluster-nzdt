@@ -1,0 +1,8 @@
+---
+
+  # Put node of the cluster in standby mode
+  - name: Put node to unstandby in cluster
+    become: yes
+    become_method: sudo
+    shell:
+      pcs node unstandby 

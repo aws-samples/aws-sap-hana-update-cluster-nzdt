@@ -1,0 +1,26 @@
+---
+
+# Runs shell to get various information
+# Gather SAP profile for HANA Database from sapservices file
+- name: Gather SAP HANA Profile   {{ SID }}
+  shell: |
+    grep -o 'pf=[^[:space:]]*' /usr/sap/sapservices | grep '_HDB'
+  register: SAPProfile
+
+# Gather Sap SID for HANA Database node from Profile
+- name: Gather SAP SID HANA Standalone {{ SID }}
+  shell: |
+    echo "{{ SAPProfile.stdout }}" | awk -F "/" '{print $4}'
+  register: SID_HANA
+
+# Gather instance number for HANA Database from Profile
+- name: Gather SAP HANA Standalone Instance Number  {{ SID }}
+  shell: |
+    echo "{{ SAPProfile.stdout }}" | awk -F "/" '{print $7}' | awk -F "_" '{print $2}' | sed 's@^[^0-9]*\([0-9]\+\).*@\1@'
+  register: SYSTEMNO
+
+# Get hostname
+- name: Get hostname
+  shell: |
+    hostname
+  register: hname

@@ -1,0 +1,8 @@
+---
+
+  # Put cluster out of maintenance mode
+  - name: Put cluster out of maintenance mode
+    become: yes
+    become_method: sudo
+    shell:
+      pcs property set maintenance-mode=false 

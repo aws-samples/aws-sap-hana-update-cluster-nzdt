@@ -1,0 +1,232 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+
+# Permission is hereby granted, free of charge, to any person obtaining a copy of this
+# software and associated documentation files (the "Software"), to deal in the Software
+# without restriction, including without limitation the rights to use, copy, modify,
+# merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+# permit persons to whom the Software is furnished to do so.
+
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+# PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+# HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+# OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+# SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+---
+
+# This play runs on HANA HA nodes (in case of HANA HSR pair with pacemaker)
+- name: HANA Patching Play for HANA cluster pair
+  become: yes
+  become_method: sudo
+  hosts: SAP_{{SID}}_hana_ha
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+
+  # Includes the vault file that contains the passwords
+  - name: Read Vault Passwords 
+    include_vars: "passvault.yml"
+
+  # Invokes the sap-hana-ver-check role that will carry out the version check before the update  
+  - name: Check Version of SAP HANA System {{ SID }} before patching
+    include_role:
+      name: sap-hana-ver-check
+    
+  # Calls the role sap-download-media in case the HANA Server Media source was S3
+  - name: Download and extract media from S3 to local server
+    include_role:
+      name: sap-download-media
+    when: "MEDIASRC == 's3'"
+
+  # Calls role sap-extract-hana-media Extract HANA Media if sourced from Local File system.
+  - name: Extract HANA Media if sourced from Local File system
+    include_role:
+      name: sap-extract-hana-media
+    when: MEDIASRC == 'fs'
+
+  # Calls role sap-hana-get-details that checks additional information about the HANA system
+  - name: Get more HANA instance information
+    include_role:
+      name: sap-hana-get-details
+
+  # Check what is the current role of the server nodes
+  - name: Check HSR roles
+    shell: |
+        sudo -u {{ internal_sid_user }} -i hdbnsutil -sr_state |grep '^mode: ' | sed -e 's|.*: ||'
+    register: mode
+
+  # Check Replication Status is Active / Sync - Fail when on primary host the replication is not shown active
+  - name: Making sure we have a healthy replication between Primary and Secondary to start with
+    shell: |
+        sudo -u {{ internal_sid_user }} -i python /usr/sap/{{ SID }}/HDB{{ SYSTEMNO.stdout }}/exe/python_support/systemReplicationStatus.py --sapcontrol=1 | grep "overall_replication_status=ACTIVE"
+    register: repcheck
+    when: mode.stdout == 'primary'
+
+  # Evaluate the return of the command in the previous task
+  - name: Evaluate Replication Check
+    fail:
+      msg: "Replication does not seem to work to begin with"
+    when: mode.stdout == 'primary' and repcheck.rc != 0
+
+  # Put Secondary Node to standby
+  - name: Put Secondary node to standby status
+    include_role:
+      name: sap-hana-cluster-put-node-standby
+    when: "'sync' in mode.stdout"
+
+  # Put cluster to maintenance mode - it is OK to do this on any of the nodes, once
+  - name: Put Cluster to maintenance mode
+    include_role:
+      name: sap-hana-cluster-put-maintenance
+    when: "'sync' in mode.stdout"
+
+  # Perform HANA Patching first on Secondary server (mode = sync or async)
+  - name: Patch SAP HANA System {{ SID }} on Secondary
+    include_role:
+      name: patch-sap-hana
+    when: "'sync' in mode.stdout"
+  
+  # Put secondary node of the cluster in unstandby mode
+  - name: Put Secondary node to unstandby status
+    include_role:
+      name: sap-hana-cluster-put-node-unstandby
+    when: "'sync' in mode.stdout"
+
+  # Remove maintenance mode from cluster - it is OK to do this on any of the nodes, once
+  - name: Put Cluster out of maintenance mode
+    include_role:
+      name: sap-hana-cluster-off-maintenance
+    when: "'sync' in mode.stdout"
+
+  # Checks if the Secondary HANA cluster (Slave) resource came back as Started
+  - name: Check if Cluster Resources are back on Secondary
+    become: yes
+    become_method: sudo
+    shell:
+      pcs status |grep Slaves |grep {{ hname.stdout }}
+    register: clustercheck
+    until: clustercheck.rc == 0
+    retries: 10
+    delay: 30
+    when: "'sync' in mode.stdout"
+
+  # Check Replication Status is Active / Sync after patching Secondary node
+  - name: Making sure we have a healthy replication between Primary and Secondary after patching Secondary
+    shell: | 
+        sudo -u {{ internal_sid_user }} -i python /usr/sap/{{ SID }}/HDB{{ SYSTEMNO.stdout }}/exe/python_support/systemReplicationStatus.py --sapcontrol=1 | grep "overall_replication_status=ACTIVE"
+    register: repcheck
+    until: repcheck.rc == 0
+    retries: 10
+    delay: 30
+    when: mode.stdout == 'primary'  
+
+  # Checking if SAPHanaSR hook communicated the SOK status back on Secondary. 
+  # Replication resuming to Active alone is not enough. Cluster attribute should be SOK for Secondary before takeover can happen.
+  - name: Checking for SOK status for cluster node attribute
+    become: yes
+    become_method: sudo
+    shell: |
+      crm_attribute --type status --name hana_{{ SID | lower }}_sync_state --query
+    register: sokcheck
+    until: "'value=SOK' in sokcheck.stdout"
+    retries: 30
+    delay: 10
+    when: "'sync' in mode.stdout"   
+
+  # Making sure landscape configuration is returning RC=4 - meaning everything is started fine
+  - name: Checking landscapeHostConfiguration.py to make sure all services started fine for HANA Secondary 
+    become: yes
+    become_method: sudo
+    shell: |
+      sudo -u {{ internal_sid_user }} -i python /usr/sap/{{ SID }}/HDB{{ SYSTEMNO.stdout }}/exe/python_support/landscapeHostConfiguration.py --sapcontrol=1
+    register: landscapecheck
+    until: landscapecheck.rc == 4
+    retries: 30
+    delay: 10
+    when: "'sync' in mode.stdout"
+    failed_when: landscapecheck.rc != 4
+
+  # Put Primary node of the cluster in standby mode
+  - name: Put Primary node to standby in cluster
+    include_role:
+      name: sap-hana-cluster-put-node-standby
+    when: mode.stdout == 'primary'
+
+  # Check if Secondary completely take over in cluster
+  - name: Check if Secondary completely take over in cluster
+    become: yes
+    become_method: sudo
+    shell: |
+      pcs status |grep Master |grep {{ hname.stdout }}
+    register: standbycheck
+    until: standbycheck.rc == 0
+    retries: 10
+    delay: 30
+    when: "'sync' in mode.stdout"
+
+  # Check if Secondary is now new primary
+  - name: Wait for Secondary to take over completely
+    shell: |
+        sudo -u {{ internal_sid_user }} -i hdbnsutil -sr_state |grep "^mode: " | sed -e 's|.*: ||'
+    register: takeover
+    until: takeover.stdout == 'primary'
+    retries: 10
+    delay: 30
+    when: "'sync' in mode.stdout"
+
+  # Check from cluster node attribute level if Secondary is now the new Primary
+  - name: Checking for PRIM status for cluster node attribute
+    become: yes
+    become_method: sudo
+    shell: |
+      crm_attribute --type status --name hana_{{ SID | lower }}_sync_state --query
+    register: primcheck
+    until: "'value=PRIM' in primcheck.stdout"
+    retries: 30
+    delay: 10
+    when: "'sync' in mode.stdout"
+
+  # Put the entire cluster in maintenance mode - it is OK to do this on any of the nodes, once
+  - name: Put cluster to maintenance mode 
+    include_role:
+      name: sap-hana-cluster-put-maintenance
+    when: mode.stdout == 'primary'
+
+  # Perform HANA Patching first on Primary server (mode = primary)
+  - name: Patch SAP HANA System {{ SID }} on Primary
+    include_role:
+      name: patch-sap-hana
+    when: mode.stdout == 'primary'
+  
+  # Put secondary node of the cluster in unstandby mode
+  - name: Put Primary host to unstandby 
+    include_role:
+      name: sap-hana-cluster-put-node-unstandby
+    when: mode.stdout == 'primary'
+
+  # Remove maintenance mode of the cluster
+  - name: Place cluster out of maintenance mode 
+    include_role:
+      name: sap-hana-cluster-off-maintenance
+    when: mode.stdout == 'primary'
+
+  # Clean up Cluster resources
+  - name: Wait 1 minute and Cleanup cluster resources
+    become: yes
+    become_method: sudo
+    shell: |
+      sleep 60
+      pcs resource cleanup
+    run_once: true
+
+  # Clean up temporary patch files
+  - name: Cleanup Extracted Media
+    include_role:
+      name: sap-extracted-media-cleanup
+
+  # Invokes the sap-hana-ver-check role that will carry out the check post update
+  - name: Check Version of SAP HANA System {{ SID }} after patching
+    include_role:
+      name: sap-hana-ver-check
+

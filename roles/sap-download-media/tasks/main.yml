@@ -1,0 +1,60 @@
+---
+   # creating directories for HANA media download
+
+   # deleting previous HANA compressed directory if any
+   - name: cleaning up previous HANA compressed directory if any
+     file:
+       path: "{{ hana_media_compressed_path }}"
+       state: absent
+   
+   - name: creating directories for HANA media download
+     file:
+       path: "{{ hana_media_compressed_path }}" 
+       state: directory
+       owner: "{{ internal_sid_user }}"
+       group: sapsys
+       mode: '0777'
+
+   # Copy S3 bucket content
+   - name: Copy S3 bucket content
+     become: yes
+     become_method: sudo
+     shell: |
+       cd {{ hana_media_compressed_path }}
+       aws s3 cp {{ MEDIALOC }} . --recursive
+
+   - name: Ensure directories are 0777
+     command: find {{ hana_media_compressed_path }} -type d -exec chmod 0777 {} \;
+
+   - name: Ensure files are 0777
+     command: find {{ hana_media_compressed_path }} -type f -exec chmod 0777 {} \;
+
+   # deleting previous HANA extract directory if any
+   - name: cleaning up previous HANA extract directory if any
+     file:
+       path: "{{ hana_media_extracted_path }}"
+       state: absent
+   
+   # re-creating temp directory for HANA media extract
+   - name: re-creating temp directory for HANA media extract
+     file: 
+       path: "{{ hana_media_extracted_path }}"
+       state: directory
+       owner: "{{ internal_sid_user }}"
+       group: sapsys
+       mode: '0777'   
+
+   # takes the file base name from the full path file name
+   - name: Set Facts for media object
+    #  become: "{{ internal_sid_user }}"
+     set_fact:
+       mediaobject: "{{ MEDIALOC | basename }}"
+       
+  # Extract S3 media
+   - name: extract HANA SAR media to {{ hana_media_extracted_path }} from {{ hana_media_compressed_path }}
+    #  environment:
+    #   TERM: vt100
+    #  command: sudo -u {{ internal_sid_user }} -i find {{ hana_media_compressed_path }} -name '*.SAR' -type f -print0 -exec SAPCAR -R {{ hana_media_extracted_path }} -xvf '{}' -manifest SIGNATURE.SMF \;
+     shell: sudo -u {{ internal_sid_user }} -i find {{ hana_media_compressed_path }} -name '*.SAR' -type f -print0 -exec SAPCAR -R {{ hana_media_extracted_path }} -xvf '{}' -manifest SIGNATURE.SMF \;
+ 
+     register: hanaextract

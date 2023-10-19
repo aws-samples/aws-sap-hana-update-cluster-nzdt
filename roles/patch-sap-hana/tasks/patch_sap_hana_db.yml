@@ -1,0 +1,62 @@
+---
+# Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+
+# Validate HANA Status
+- name:  Check HANA {{ SID }} status
+  shell: |
+    /usr/sap/hostctrl/exe/sapcontrol -nr "{{ SYSTEMNO.stdout }}" -function GetProcessList 
+  register: STATUSHANA
+  failed_when: false
+  ignore_errors: True
+  when: 
+    - SID_HANA.stdout == SID     
+
+# Generate password file from jinja template
+- name: Create SAP HANA Installation Password File
+  become: yes
+  become_user: "{{ internal_sid_user }}"
+  template: src=hana_password.xml.j2 dest="{{ hana_media_extracted_path }}/hana_password.xml"
+  when: 
+    - SID_HANA.stdout == SID 
+
+- name: Change the permission
+  file:
+    path: "{{ hana_media_extracted_path }}/hana_password.xml"
+    state: file
+    owner: "{{ internal_sid_user }}"
+    group: sapsys
+    mode: '0775'
+
+# Find hdblcm in the extracted media with full path name
+- name: Find hdblcm in staging
+  shell: >
+    find {{ hana_media_extracted_path }} -name hdblcm -type f -print 
+  register: hdblcmpath
+  when: 
+    - SID_HANA.stdout == SID 
+
+# Run hdblcm with appropriate parameters and feeding passwords from template
+- name: Execute core SAP HANA Upgrade process
+  become: yes
+  become_method: sudo
+  shell: |
+    cat "{{ hana_media_extracted_path }}/hana_password.xml" | "{{ hdblcmpath.stdout }}" --action=update --components=all --batch -sid="{{ SID }}" --hostname="{{ hname.stdout }}" --ignore=check_signature_file --read_password_from_stdin=xml
+  register: installation_completed  
+  when: 
+    - SID_HANA.stdout == SID 
+
+# Print the result to the screen
+- name: Debug Message
+  ansible.builtin.debug:
+    msg: "{{ installation_completed }}"
+  when: 
+    - SID_HANA.stdout == SID 
+
+# Remove password file for security reasons
+- name: Sanitize files
+  file:
+    path: "{{ hana_media_extracted_path }}/hana_password.xml"
+    state: absent
+  when: 
+    - SID_HANA.stdout == SID 
+

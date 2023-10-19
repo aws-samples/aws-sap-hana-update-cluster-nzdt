@@ -1,0 +1,13 @@
+---
+# Group Variables
+internal_sid_user: "{{ SID | lower }}adm"
+hana_media_compressed_path: /hana/shared/upgrade/compressed/server
+hana_media_extracted_path: /hana/shared/upgrade/extracted/server
+
+
+
+
+
+
+
+

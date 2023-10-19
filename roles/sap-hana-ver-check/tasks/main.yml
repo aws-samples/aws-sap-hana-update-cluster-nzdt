@@ -1,0 +1,14 @@
+---
+
+# Runs shell a few batch command to get version information
+- name: Gather SAP HANA Version  {{ SID }}
+  # environment:
+  #   TERM: vt100
+  # command: sudo -u {{ internal_sid_user }} -i hdbsrvutil -v
+  shell: sudo -u {{ internal_sid_user }} -i hdbsrvutil -v
+  register: HDBver
+
+# Debugs result to screen
+- name: HDB version information
+  debug: 
+     msg: "{{ HDBver.stdout.split('\n') }}"
